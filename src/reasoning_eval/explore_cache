@@ -1,0 +1,139 @@
+import sqlite3
+import pandas as pd
+
+# Specify the path to your diskcache file
+db_path = r"C:\Users\Jirac\mt-metrics-eval\cache\cache.db"
+
+# Connect to the SQLite database
+conn = sqlite3.connect(db_path)
+
+# List all tables in the database
+tables = pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table';", conn)
+print("Tables in the database:")
+print(tables)
+
+# If you know a table name (e.g., 'cache'), load its contents into a DataFrame:
+df = pd.read_sql_query("SELECT * FROM cache;", conn)
+print("Preview of 'cache' table:")
+print(df.head())
+
+# Close the connection
+conn.close()
+
+import pickle
+import re
+import pandas as pd
+
+# Function to parse the message content into its parts.
+def parse_message_content(msg):
+    """
+    Extracts:
+      - thought_text: Text between <think> and </think>
+      - critical_error: The text under "Critical:"
+      - major_error: The text under "Major:"
+      - minor_error: The text under "Minor:"
+    """
+    thought_text = ""
+    critical_error = ""
+    major_error = ""
+    minor_error = ""
+    
+    # Extract text within <think> ... </think>
+    thought_match = re.search(r"<think>(.*?)</think>", msg, re.DOTALL)
+    if thought_match:
+        thought_text = thought_match.group(1).strip()
+    
+    # Remove the <think> block to isolate classification parts
+    classification_text = re.sub(r"<think>.*?</think>", "", msg, flags=re.DOTALL).strip()
+    
+    # Extract error classifications using regex
+    crit_match = re.search(r"Critical:\s*(.*?)\s*Major:", classification_text, re.DOTALL)
+    if crit_match:
+        critical_error = crit_match.group(1).strip()
+    
+    maj_match = re.search(r"Major:\s*(.*?)\s*Minor:", classification_text, re.DOTALL)
+    if maj_match:
+        major_error = maj_match.group(1).strip()
+    
+    min_match = re.search(r"Minor:\s*(.*)", classification_text, re.DOTALL)
+    if min_match:
+        minor_error = min_match.group(1).strip()
+    
+    return {
+        "thought_text": thought_text,
+        "critical_error": critical_error,
+        "major_error": major_error,
+        "minor_error": minor_error
+    }
+
+# Function to unpickle a value and extract fields.
+def extract_fields_from_pickle(pickled_data):
+    """
+    Unpickles the binary data and extracts:
+      - chat_id, role, created, model, message_content,
+      - parsed message parts (thought_text, critical_error, major_error, minor_error)
+    Returns a dictionary.
+    """
+    try:
+        obj = pickle.loads(pickled_data)
+        data_dict = obj.__dict__ if hasattr(obj, "__dict__") else obj
+        
+        chat_id = data_dict.get("id", None)
+        role = data_dict.get("role", None)
+        created = data_dict.get("created", None)
+        model = data_dict.get("model", None)
+        
+        # Extract message content from the first choice (if available)
+        msg_content = None
+        choices = data_dict.get("choices", [])
+        if choices and isinstance(choices, list):
+            first_choice = choices[0]
+            if hasattr(first_choice, "__dict__"):
+                msg_obj = first_choice.__dict__.get("message", None)
+                if msg_obj and hasattr(msg_obj, "__dict__"):
+                    msg_content = msg_obj.__dict__.get("content", None)
+        
+        # Parse message content if available
+        parsed_message = {}
+        if msg_content and isinstance(msg_content, str):
+            parsed_message = parse_message_content(msg_content)
+        else:
+            parsed_message = {
+                "thought_text": None,
+                "critical_error": None,
+                "major_error": None,
+                "minor_error": None
+            }
+        
+        return {
+            "chat_id": chat_id,
+            "role": role,
+            "created": created,
+            "model": model,
+            "message_content": msg_content,
+            "thought_text": parsed_message.get("thought_text"),
+            "critical_error": parsed_message.get("critical_error"),
+            "major_error": parsed_message.get("major_error"),
+            "minor_error": parsed_message.get("minor_error")
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+# Assuming you already have a DataFrame named 'df' with a column "value"
+# that contains the binary pickled objects.
+#
+# Example:
+# df = pd.read_sql_query("SELECT * FROM cache;", conn)
+
+# Apply the extraction function to each row and convert the result to separate columns.
+parsed_df = df["value"].apply(extract_fields_from_pickle).apply(pd.Series)
+
+# Join the new columns to the original DataFrame (optional)
+df_final = df.join(parsed_df)
+
+# Save the resulting DataFrame to a TSV file
+df_final.to_csv("parsed_cache.tsv", sep="\t", index=False)
+
+print("DataFrame saved to 'parsed_cache.tsv'")
+
+# Interesting filter

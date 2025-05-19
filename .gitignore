@@ -1,0 +1,5 @@
+*.out
+src/reasoning_eval/summarization_evaluation/evals
+src/reasoning_eval/mt/DeepSeekUtils/outputs
+*.pyc
+*__pycache__*
